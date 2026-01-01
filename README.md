@@ -1,4 +1,4 @@
-# payments worker
+# payments.xaostech.io
 
 <!-- Project Shields/Badges -->
 <p align="center">
@@ -70,21 +70,28 @@
 
 ## 🔍 Overview
 
-payments worker
+Payment processing & subscription management:
+- Stripe webhook handling
+- Subscription management
+- Invoice tracking
+- Billing history
 
-### Why payments worker?
+### Why payments.xaostech.io?
 
-{{WHY_PROJECT}}
+Dedicated **payment operations** worker. Handles:
+- Stripe integration
+- Subscription lifecycle
+- Revenue tracking
 
 ---
 
 ## ✨ Features
 
-- 🚀 **Feature 1** - Description of feature 1
-- 🔧 **Feature 2** - Description of feature 2
-- 📦 **Feature 3** - Description of feature 3
-- 🔒 **Feature 4** - Description of feature 4
-- ⚡ **Feature 5** - Description of feature 5
+- 💳 **Stripe Integration** - Full payment processing
+- 📦 **Subscriptions** - Recurring billing management
+- 📄 **Invoices** - Tracking & history
+- 🔐 **Webhook Validation** - Secure Stripe events
+- 🔒 **PCI Compliance** - No card data stored locally
 
 ---
 
@@ -92,12 +99,26 @@ payments worker
 
 ### Prerequisites
 
-- {{PREREQUISITE_1}}
-- {{PREREQUISITE_2}}
-- {{PREREQUISITE_3}}
+- Node.js 18+
+- Cloudflare account with Workers
+- D1 database
+- Stripe account & API keys (Worker Secrets)
 
 ### Quick Start
 
+```bash
+# Clone the repository
+git clone https://github.com/XAOSTECH/payments.xaostech.io.git
+cd payments.xaostech.io
+
+# Install dependencies
+npm install
+
+# Local development
+npm run dev
+
+# Deploy to production
+npm run deploy
 ```bash
 # Clone the repository
 git clone https://github.com/XAOSTECH/payments.xaostech.io.git

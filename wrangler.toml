@@ -2,10 +2,6 @@ name = "xaostech-payments"
 compatibility_date = "2025-12-31"
 main = "src/index.js"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "payments-db"
-
 [vars]
 STRIPE_WEBHOOK_ENDPOINT = "whsec_"
 
@@ -15,4 +11,3 @@ routes = [{ pattern = "payments.xaostech.io/*", zone_name = "xaostech.io" }]
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "payments-db"
-database_id = ""

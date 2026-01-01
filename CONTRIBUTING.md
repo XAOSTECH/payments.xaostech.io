@@ -1,4 +1,4 @@
-# Contributing to payments worker
+# Contributing to payments.xaostech.io
 
 Thank you for your interest in contributing! This document provides guidelines and steps for contributing.
 
