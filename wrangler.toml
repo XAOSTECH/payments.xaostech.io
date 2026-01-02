@@ -14,6 +14,10 @@ binding = "DB"
 database_name = "payments-db"
 database_id = "${D1_PAYMENTS_DB_ID}"
 
+[[env.production.r2_buckets]]
+binding = "IMG"
+bucket_name = "img"
+
 [env.testing]
 routes = [{ pattern = "payments.testing.local/*", zone_name = "localhost" }]
 
