@@ -4,6 +4,7 @@ main = "src/index.js"
 send_metrics = false
 
 [env.production]
+name = "xaostech-payments"
 routes = [{ pattern = "payments.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.vars]
