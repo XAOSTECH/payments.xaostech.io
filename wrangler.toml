@@ -4,6 +4,8 @@ main = "src/index.js"
 send_metrics = false
 
 [env.production]
+name = "xaostech-payments"
+main = "src/index.js"
 routes = [{ pattern = "payments.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.vars]
@@ -13,6 +15,10 @@ STRIPE_WEBHOOK_ENDPOINT = "whsec_"
 binding = "DB"
 database_name = "payments-db"
 database_id = "${D1_PAYMENTS_DB_ID}"
+
+[[env.production.r2_buckets]]
+binding = "IMG"
+bucket_name = "img"
 
 [env.testing]
 routes = [{ pattern = "payments.testing.local/*", zone_name = "localhost" }]

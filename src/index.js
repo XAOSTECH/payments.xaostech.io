@@ -49,6 +49,29 @@ export default {
       }
     }
 
-    return new Response('Not found', { status: 404 });
-  }
-};
+    // Debug endpoints
+    if (url.pathname === '/debug/env') {
+      return new Response(JSON.stringify({
+        processEnvHasClientId: !!(globalThis.process && process.env && process.env.CF_ACCESS_CLIENT_ID),
+        hasStripeSecret: !!env.STRIPE_WEBHOOK_SECRET
+      }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    if (url.pathname === '/debug/fetch-direct') {
+      try {
+        const clientId = env.CF_ACCESS_CLIENT_ID;
+        const clientSecret = env.CF_ACCESS_CLIENT_SECRET;
+        const headers = { 'User-Agent': 'XAOSTECH debug fetch' };
+        if (clientId && clientSecret) {
+          headers['CF-Access-Client-Id'] = clientId;
+          headers['CF-Access-Client-Secret'] = clientSecret;
+          headers['X-Proxy-CF-Injected'] = 'direct-test';
+        }
+        const resp = await fetch('https://api.xaostech.io/debug/headers', { method: 'GET', headers });
+        const txt = await resp.text();
+        return new Response(JSON.stringify({ status: resp.status, bodyStartsWith: txt.slice(0, 200) }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: 'fetch failed', message: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
