@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "build": "echo 'no build required for payments.xaostech.io'",
     "deploy": "wrangler deploy --env production"
   },
   "devDependencies": {
