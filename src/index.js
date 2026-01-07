@@ -1,11 +1,31 @@
+import { getSecurityHeaders } from '../shared/types/security';
+import { createProxyHandler } from '../shared/types/api-proxy';
+import { serveFavicon } from '../shared/types/favicon';
+
+const proxyHandler = createProxyHandler();
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // Delegate /api/* requests to shared API proxy so API_ACCESS_* is injected
+    if (url.pathname.startsWith('/api/')) {
+      const proxied = await proxyHandler({ request, locals: { runtime: { env } } });
+      return applySecurityHeadersJS(proxied);
+    }
+
+    function applySecurityHeadersJS(response) {
+      const headers = new Headers(response.headers || {});
+      const sec = getSecurityHeaders();
+      for (const k in sec) headers.set(k, sec[k]);
+      return new Response(response.body, { status: response.status || 200, headers });
+    }
+
     if (url.pathname === '/health') {
-      return new Response(JSON.stringify({ status: 'ok' }), {
+      const r = new Response(JSON.stringify({ status: 'ok' }), {
         headers: { 'Content-Type': 'application/json' }
       });
+      return applySecurityHeadersJS(r);
     }
 
     // Stripe webhook endpoint
@@ -22,10 +42,10 @@ export default {
         switch (event.type) {
           case 'payment_intent.succeeded':
             // Handle successful payment
-            return new Response(JSON.stringify({ success: true }), {
+            return applySecurityHeadersJS(new Response(JSON.stringify({ success: true }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
-            });
+            }));
 
           case 'customer.subscription.created':
           case 'customer.subscription.updated':
@@ -49,29 +69,11 @@ export default {
       }
     }
 
-    // Debug endpoints
-    if (url.pathname === '/debug/env') {
-      return new Response(JSON.stringify({
-        processEnvHasClientId: !!(globalThis.process && process.env && process.env.CF_ACCESS_CLIENT_ID),
-        hasStripeSecret: !!env.STRIPE_WEBHOOK_SECRET
-      }), { headers: { 'Content-Type': 'application/json' } });
+    // Serve favicon via shared handler
+    if (url.pathname === '/favicon.ico') {
+      return serveFavicon(request, env, proxyHandler, applySecurityHeadersJS);
     }
 
-    if (url.pathname === '/debug/fetch-direct') {
-      try {
-        const clientId = env.CF_ACCESS_CLIENT_ID;
-        const clientSecret = env.CF_ACCESS_CLIENT_SECRET;
-        const headers = { 'User-Agent': 'XAOSTECH debug fetch' };
-        if (clientId && clientSecret) {
-          headers['CF-Access-Client-Id'] = clientId;
-          headers['CF-Access-Client-Secret'] = clientSecret;
-          headers['X-Proxy-CF-Injected'] = 'direct-test';
-        }
-        const resp = await fetch('https://api.xaostech.io/debug/headers', { method: 'GET', headers });
-        const txt = await resp.text();
-        return new Response(JSON.stringify({ status: resp.status, bodyStartsWith: txt.slice(0, 200) }), { headers: { 'Content-Type': 'application/json' } });
-      } catch (err) {
-        return new Response(JSON.stringify({ error: 'fetch failed', message: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-      }
-    }
-
+    return new Response('Not found', { status: 404 });
+  }
+};
