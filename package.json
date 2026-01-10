@@ -7,7 +7,12 @@
     "build": "echo 'no build required for payments.xaostech.io'",
     "deploy": "wrangler deploy --env production"
   },
+  "dependencies": {
+    "hono": "latest"
+  },
   "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "latest",
     "wrangler": "latest"
   }
 }
