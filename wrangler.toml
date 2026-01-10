@@ -1,11 +1,11 @@
 name = "xaostech-payments"
 compatibility_date = "2025-12-31"
-main = "src/index.js"
+main = "src/index.ts"
 send_metrics = false
 
 [env.production]
 name = "xaostech-payments"
-main = "src/index.js"
+main = "src/index.ts"
 routes = [{ pattern = "payments.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.vars]
