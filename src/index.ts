@@ -353,6 +353,271 @@ function getFeatures(plan: string): string[] {
   return features[plan] || features.free;
 }
 
+// ============ FAMILY BILLING ============
+
+// Get family plan for a user (parent or child)
+app.get('/family/:userId', async (c) => {
+  const userId = c.req.param('userId');
+  const authUserId = c.req.header('X-User-ID');
+
+  try {
+    // Check if user is a parent with family plan
+    const parentPlan = await c.env.DB.prepare(`
+      SELECT fp.*, s.plan, s.status, s.current_period_end
+      FROM family_plans fp
+      JOIN subscriptions s ON fp.subscription_id = s.id
+      WHERE fp.parent_user_id = ?
+    `).bind(userId).first();
+
+    if (parentPlan) {
+      // Get family members
+      const members = await c.env.DB.prepare(`
+        SELECT * FROM family_members WHERE subscription_id = ? AND removed_at IS NULL
+      `).bind(parentPlan.subscription_id).all();
+
+      return c.json({
+        role: 'parent',
+        plan: parentPlan.plan,
+        status: parentPlan.status,
+        current_period_end: parentPlan.current_period_end,
+        max_members: parentPlan.max_family_members,
+        members: members.results || [],
+        features: getFeatures(parentPlan.plan as string),
+      });
+    }
+
+    // Check if user is a family member (child)
+    const memberPlan = await c.env.DB.prepare(`
+      SELECT fm.*, fp.max_family_members, s.plan, s.status, s.current_period_end
+      FROM family_members fm
+      JOIN family_plans fp ON fm.subscription_id = fp.subscription_id
+      JOIN subscriptions s ON fm.subscription_id = s.id
+      WHERE fm.member_user_id = ? AND fm.removed_at IS NULL
+    `).bind(userId).first();
+
+    if (memberPlan) {
+      return c.json({
+        role: 'member',
+        member_type: memberPlan.member_type,
+        plan: memberPlan.plan,
+        status: memberPlan.status,
+        parent_user_id: memberPlan.parent_user_id,
+        features: getFeatures(memberPlan.plan as string),
+      });
+    }
+
+    // No family plan - check for individual subscription
+    const sub = await c.env.DB.prepare(
+      'SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).bind(userId).first();
+
+    return c.json({
+      role: 'individual',
+      plan: sub?.plan || 'free',
+      status: sub?.status || 'active',
+      features: getFeatures((sub?.plan as string) || 'free'),
+      can_create_family: sub?.plan && sub.plan !== 'free',
+    });
+  } catch (err) {
+    console.error('[FAMILY] Error fetching:', err);
+    return c.json({ error: 'Failed to fetch family plan' }, 500);
+  }
+});
+
+// Create family plan (requires pro/enterprise subscription)
+app.post('/family', async (c) => {
+  const { userId } = await c.req.json();
+  const authUserId = c.req.header('X-User-ID');
+
+  if (authUserId !== userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    // Check user has paid subscription
+    const sub = await c.env.DB.prepare(
+      'SELECT * FROM subscriptions WHERE user_id = ? AND status = ? AND plan != ?'
+    ).bind(userId, 'active', 'free').first();
+
+    if (!sub) {
+      return c.json({ error: 'Pro or Enterprise subscription required for family plan' }, 403);
+    }
+
+    // Check if family plan already exists
+    const existing = await c.env.DB.prepare(
+      'SELECT id FROM family_plans WHERE parent_user_id = ?'
+    ).bind(userId).first();
+
+    if (existing) {
+      return c.json({ error: 'Family plan already exists', family_plan_id: existing.id });
+    }
+
+    // Create family plan
+    const id = crypto.randomUUID();
+    const maxMembers = sub.plan === 'enterprise' ? 10 : 5;
+
+    await c.env.DB.prepare(`
+      INSERT INTO family_plans (id, subscription_id, parent_user_id, max_family_members, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(id, sub.id, userId, maxMembers, Math.floor(Date.now() / 1000)).run();
+
+    return c.json({
+      success: true,
+      family_plan_id: id,
+      max_members: maxMembers,
+    });
+  } catch (err) {
+    console.error('[FAMILY] Create error:', err);
+    return c.json({ error: 'Failed to create family plan' }, 500);
+  }
+});
+
+// Add family member (for linking child accounts)
+app.post('/family/:userId/members', async (c) => {
+  const userId = c.req.param('userId');
+  const { memberUserId, memberType = 'child' } = await c.req.json();
+  const authUserId = c.req.header('X-User-ID');
+
+  if (authUserId !== userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  if (!memberUserId) {
+    return c.json({ error: 'memberUserId required' }, 400);
+  }
+
+  try {
+    // Get family plan
+    const familyPlan = await c.env.DB.prepare(`
+      SELECT fp.*, s.id as subscription_id
+      FROM family_plans fp
+      JOIN subscriptions s ON fp.subscription_id = s.id
+      WHERE fp.parent_user_id = ?
+    `).bind(userId).first();
+
+    if (!familyPlan) {
+      return c.json({ error: 'No family plan found. Create one first.' }, 404);
+    }
+
+    // Check member limit
+    const memberCount = await c.env.DB.prepare(
+      'SELECT COUNT(*) as count FROM family_members WHERE subscription_id = ? AND removed_at IS NULL'
+    ).bind(familyPlan.subscription_id).first();
+
+    if ((memberCount?.count as number || 0) >= (familyPlan.max_family_members as number)) {
+      return c.json({ error: 'Family member limit reached' }, 403);
+    }
+
+    // Check if member already in a family
+    const existingMember = await c.env.DB.prepare(
+      'SELECT id FROM family_members WHERE member_user_id = ? AND removed_at IS NULL'
+    ).bind(memberUserId).first();
+
+    if (existingMember) {
+      return c.json({ error: 'User is already a family member' }, 409);
+    }
+
+    // Add member
+    const id = crypto.randomUUID();
+    await c.env.DB.prepare(`
+      INSERT INTO family_members (id, subscription_id, parent_user_id, member_user_id, member_type, added_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(id, familyPlan.subscription_id, userId, memberUserId, memberType, Math.floor(Date.now() / 1000)).run();
+
+    return c.json({
+      success: true,
+      member_id: id,
+      message: `Family member added successfully`,
+    });
+  } catch (err) {
+    console.error('[FAMILY] Add member error:', err);
+    return c.json({ error: 'Failed to add family member' }, 500);
+  }
+});
+
+// Remove family member
+app.delete('/family/:userId/members/:memberId', async (c) => {
+  const userId = c.req.param('userId');
+  const memberId = c.req.param('memberId');
+  const authUserId = c.req.header('X-User-ID');
+
+  if (authUserId !== userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    // Verify ownership and remove
+    const result = await c.env.DB.prepare(`
+      UPDATE family_members SET removed_at = ?
+      WHERE id = ? AND parent_user_id = ? AND removed_at IS NULL
+    `).bind(Math.floor(Date.now() / 1000), memberId, userId).run();
+
+    if (result.meta.changes === 0) {
+      return c.json({ error: 'Member not found or already removed' }, 404);
+    }
+
+    return c.json({ success: true, message: 'Family member removed' });
+  } catch (err) {
+    console.error('[FAMILY] Remove member error:', err);
+    return c.json({ error: 'Failed to remove family member' }, 500);
+  }
+});
+
+// Get subscription for a user (including family inheritance)
+app.get('/subscription/effective/:userId', async (c) => {
+  const userId = c.req.param('userId');
+
+  try {
+    // Check direct subscription first
+    const directSub = await c.env.DB.prepare(
+      'SELECT * FROM subscriptions WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1'
+    ).bind(userId, 'active').first();
+
+    if (directSub && directSub.plan !== 'free') {
+      return c.json({
+        user_id: userId,
+        plan: directSub.plan,
+        status: directSub.status,
+        source: 'direct',
+        features: getFeatures(directSub.plan as string),
+      });
+    }
+
+    // Check if user is a family member
+    const familySub = await c.env.DB.prepare(`
+      SELECT s.plan, s.status, fm.member_type, fp.parent_user_id
+      FROM family_members fm
+      JOIN subscriptions s ON fm.subscription_id = s.id
+      JOIN family_plans fp ON fm.subscription_id = fp.subscription_id
+      WHERE fm.member_user_id = ? AND fm.removed_at IS NULL AND s.status = 'active'
+    `).bind(userId).first();
+
+    if (familySub) {
+      return c.json({
+        user_id: userId,
+        plan: familySub.plan,
+        status: familySub.status,
+        source: 'family',
+        parent_user_id: familySub.parent_user_id,
+        member_type: familySub.member_type,
+        features: getFeatures(familySub.plan as string),
+      });
+    }
+
+    // Default to free plan
+    return c.json({
+      user_id: userId,
+      plan: 'free',
+      status: 'active',
+      source: 'default',
+      features: getFeatures('free'),
+    });
+  } catch (err) {
+    console.error('[SUBSCRIPTION] Effective lookup error:', err);
+    return c.json({ error: 'Failed to determine subscription' }, 500);
+  }
+});
+
 // ============ ERROR HANDLING ============
 app.notFound((c) => c.json({ error: 'Not found', path: c.req.path }, 404));
 
