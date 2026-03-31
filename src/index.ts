@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, Context, Next } from 'hono';
 import { createApiProxyRoute } from '../shared/types/api-proxy-hono';
 import { serveFaviconHono } from '../shared/types/favicon';
 import { applySecurityHeaders } from '../shared/types/security';
@@ -9,6 +9,72 @@ interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   API_ACCESS_CLIENT_ID?: string;
   API_ACCESS_CLIENT_SECRET?: string;
+}
+
+// ============ STRIPE SIGNATURE VERIFICATION ============
+// Verifies Stripe webhook signatures using Web Crypto API (no SDK needed)
+async function verifyStripeSignature(
+  payload: string,
+  sigHeader: string,
+  secret: string
+): Promise<Record<string, any> | null> {
+  const TOLERANCE = 300; // 5 minutes
+  const parts = sigHeader.split(',');
+  const timestamp = parts.find(p => p.startsWith('t='))?.slice(2);
+  const signatures = parts.filter(p => p.startsWith('v1=')).map(p => p.slice(3));
+
+  if (!timestamp || signatures.length === 0) return null;
+
+  const ts = parseInt(timestamp, 10);
+  if (Math.abs(Math.floor(Date.now() / 1000) - ts) > TOLERANCE) return null;
+
+  const signedPayload = `${timestamp}.${payload}`;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(signedPayload));
+  const expected = Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  const valid = signatures.some(s => {
+    if (s.length !== expected.length) return false;
+    let result = 0;
+    for (let i = 0; i < s.length; i++) result |= s.charCodeAt(i) ^ expected.charCodeAt(i);
+    return result === 0;
+  });
+
+  return valid ? JSON.parse(payload) : null;
+}
+
+// ============ SESSION AUTH VIA API PROXY ============
+// Validates user identity by calling api.xaostech.io/auth/me (no direct KV needed)
+interface AuthUser { userId: string; role: string; }
+
+async function getAuthUser(c: Context<{ Bindings: Env }>): Promise<AuthUser | null> {
+  const cookie = c.req.header('Cookie') || '';
+  if (!cookie.includes('session_id=')) return null;
+
+  try {
+    const apiBase = 'https://api.xaostech.io';
+    const headers: Record<string, string> = { 'Cookie': cookie };
+    const id = c.env.API_ACCESS_CLIENT_ID;
+    const secret = c.env.API_ACCESS_CLIENT_SECRET;
+    if (id && secret) {
+      headers['CF-Access-Client-Id'] = id;
+      headers['CF-Access-Client-Secret'] = secret;
+    }
+    const res = await fetch(`${apiBase}/auth/me`, { headers, redirect: 'manual' });
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    if (!data.userId && !data.id) return null;
+    return { userId: data.userId || data.id, role: data.role || 'user' };
+  } catch { return null; }
 }
 
 interface Subscription {
@@ -59,9 +125,12 @@ app.post('/webhook', async (c) => {
   try {
     const body = await c.req.text();
     
-    // Note: In production, verify signature using Stripe's crypto verification
-    // const event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-    const event = JSON.parse(body);
+    // Verify Stripe webhook signature using Web Crypto API (no SDK needed)
+    const event = await verifyStripeSignature(body, signature, webhookSecret);
+    if (!event) {
+      console.error('[WEBHOOK] Signature verification failed');
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
 
     console.log('[WEBHOOK] Processing event:', event.type);
 
@@ -113,10 +182,10 @@ app.post('/webhook', async (c) => {
 // Get current subscription status
 app.get('/subscription/:userId', async (c) => {
   const userId = c.req.param('userId');
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
   // Verify user is requesting their own subscription
-  if (authUserId !== userId) {
+  if (!auth || auth.userId !== userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -205,9 +274,9 @@ app.post('/checkout', async (c) => {
 // Cancel subscription
 app.post('/subscription/:userId/cancel', async (c) => {
   const userId = c.req.param('userId');
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
-  if (authUserId !== userId) {
+  if (!auth || auth.userId !== userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -358,7 +427,7 @@ function getFeatures(plan: string): string[] {
 // Get family plan for a user (parent or child)
 app.get('/family/:userId', async (c) => {
   const userId = c.req.param('userId');
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
   try {
     // Check if user is a parent with family plan
@@ -427,9 +496,9 @@ app.get('/family/:userId', async (c) => {
 // Create family plan (requires pro/enterprise subscription)
 app.post('/family', async (c) => {
   const { userId } = await c.req.json();
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
-  if (authUserId !== userId) {
+  if (!auth || auth.userId !== userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -476,9 +545,9 @@ app.post('/family', async (c) => {
 app.post('/family/:userId/members', async (c) => {
   const userId = c.req.param('userId');
   const { memberUserId, memberType = 'child' } = await c.req.json();
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
-  if (authUserId !== userId) {
+  if (!auth || auth.userId !== userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
@@ -539,9 +608,9 @@ app.post('/family/:userId/members', async (c) => {
 app.delete('/family/:userId/members/:memberId', async (c) => {
   const userId = c.req.param('userId');
   const memberId = c.req.param('memberId');
-  const authUserId = c.req.header('X-User-ID');
+  const auth = await getAuthUser(c);
 
-  if (authUserId !== userId) {
+  if (!auth || auth.userId !== userId) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
 
