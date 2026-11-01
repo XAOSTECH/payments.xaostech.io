@@ -63,8 +63,8 @@
 - [Contributing](#-contributing)
 - [Roadmap](#-roadmap)
 - [Support](#-support)
-- [License](#-license)
-- [Acknowledgments](#-acknowledgments)
+- [Licence](#-licence)
+- [Acknowledgements](#-acknowledgements)
 
 ---
 
@@ -249,13 +249,13 @@ See the [open issues](https://github.com/XAOSTECH/payments.xaostech.io/issues) f
 
 ---
 
-## 📄 License
+## 📄 Licence
 
 Distributed under the GPL-3.0 License. See [`LICENSE`](LICENSE) for more information.
 
 ---
 
-## 🙏 Acknowledgments
+## 🙏 Acknowledgements
 
 - {{ACKNOWLEDGMENT_1}}
 - {{ACKNOWLEDGMENT_2}}
